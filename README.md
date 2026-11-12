@@ -40,7 +40,7 @@ OCR and ASR run beforehand, and the agent reads their saved outputs.
 - **Tradeoff:** the agent can't ask for a fresh pass (for example, "re-OCR these 3 seconds at higher resolution"). It can only use what was precomputed.
 - **Benefit:** most windows are auto-accepted with **no LLM call at all**. The LLM only sees real disputes.
 
-Honest framing: this is mostly a **workflow with one agentic step**. LLM autonomy is used only where judgment is needed, and the rest is plain, testable code.
+This is mostly a workflow with one agentic step. LLM autonomy is used only where judgment is needed, and the rest is plain, testable code.
 
 ## Single vs multi-agent
 
