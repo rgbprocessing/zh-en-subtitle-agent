@@ -10,6 +10,26 @@ OCR and ASR run beforehand, in Colab or wherever is cheapest. Their outputs are 
 - **Tradeoff:** the agent can't ask for a fresh model pass (for example, "re-OCR this 3 s at higher resolution"). It can only look at what was precomputed. A future `request_rerun` tool could queue that work instead of running it inline.
 - **Measured effect:** most windows are auto-accepted with no LLM call at all. `report.json` gives the split for each episode.
 
+## Two architectures (for comparison)
+
+| | `--mode single` (baseline) | `--mode multi` |
+|---|---|---|
+| Reconcile | one agent, windows one at a time | one **reconciler agent per window, in parallel** (LangGraph `Send`) |
+| Translate | translator, one pass | **translator ↔ reviewer**: reviewer flags problems, translator revises (1 round) |
+| QA | deterministic timing repair | same |
+
+Both share tools, prompts, schemas and QA, so the comparison isolates the architecture:
+
+```bash
+python -m subtitle_agent.compare sample/manifest.toml --model ollama:qwen2.5:7b \
+    --ref-zh sample/reference_zh.srt --ref-en sample/reference_en.srt
+```
+→ a table of Chinese CER, English chrF, LLM calls, tokens and time per mode (`out/compare/compare.md`).
+
+## Lessons from evals
+
+- **Run 1 (qwen2.5:7b, single):** CER 0.025. The agent dropped the Whisper hallucination, but its free-text JSON for the OCR-typo window was unparseable, so it fell back to the OCR text and kept the typo. **Fix:** schema-constrained structured output (Pydantic + `with_structured_output`), with a text-parse fallback and the raw error logged in the notes.
+
 ## How it works
 
 ```
@@ -28,7 +48,9 @@ precomputed files ─► loaders ─► align into time windows ─► agree? �
 | Group cues into windows, score agreement, find OCR typos outvoted by ASR, drop duplicate or recurring overlays | `timeline.py` | no |
 | Glossary retrieval (names, show terms) | `glossary.py` | no |
 | Agent tools: `get_window`, `compare_sources`, `lookup_glossary`, `get_rules` | `tools.py` | — |
-| Graph: reconcile → translate → QA → write | `graph.py` | yes |
+| Graph (single + multi modes), structured-output schemas | `graph.py` | yes |
+| Run both modes and score them | `compare.py` | yes |
+| chrF translation score | `eval_mt.py` | no |
 | Reading-speed QA: lengthen cues where there's room | `output.py` | no |
 | CER evaluation + per-source ablation | `eval_cer.py` | no |
 
@@ -72,6 +94,8 @@ fields = { start = "t0", end = "t1", text = "rec_text", conf = "rec_score" }
 - [ ] Translation eval: LLM-judge rubric + human spot checks against the finished English SRTs
 - [ ] Prompt-injection test: on-screen text containing instructions, check the agent transcribes rather than obeys
 - [ ] Dockerfile + cloud deploy of a demo running on cached outputs from a short clip
-- [ ] Advanced: parallel reconcile with LangGraph `Send`, separate translator/QA agents under a supervisor
+- [x] Multi-agent mode: parallel reconcilers (`Send`) + translator/reviewer loop
+- [ ] Supervisor that routes each conflict to a specialist (OCR-vs-ASR, hallucination check, overlay)
+- [ ] Test on a video with official zh + en subtitles (held-out test set; don't tune on it)
 
 *No show footage or full transcripts are included in this repo. Sample data is invented.*

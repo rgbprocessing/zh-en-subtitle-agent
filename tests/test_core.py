@@ -2,6 +2,7 @@ import unittest
 from pathlib import Path
 
 from subtitle_agent.eval_cer import levenshtein
+from subtitle_agent.eval_mt import chrf
 from subtitle_agent.output import qa_timing
 from subtitle_agent.pipeline import Episode
 from subtitle_agent.schema import MasterCue
@@ -33,6 +34,12 @@ class Core(unittest.TestCase):
         # OCR typo outvoted by both ASR models goes to the agent
         texts = [ep.index.windows[w].text_of("cropped_ocr") for w in ep.pending]
         self.assertIn("金队长你准各好了吗", texts)
+
+    def test_chrf(self):
+        self.assertEqual(chrf(['Captain Kim, are you ready?'], ['Captain Kim, are you ready?']), 100.0)
+        close = chrf(['Captain Kim, are you ready?'], ['Are you ready, Captain Kim?'])
+        self.assertTrue(50 < close < 100)
+        self.assertLess(chrf(['Captain Kim'], ['The next day']), 30)
 
     def test_qa_lengthens_where_room(self):
         a = MasterCue(0, 0.0, 1.0, "x", "subtitle", en="A" * 30)

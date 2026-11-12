@@ -1,7 +1,7 @@
 """CLI.
 
   python -m subtitle_agent.run sample/manifest.toml --dry-run
-  python -m subtitle_agent.run ep05/manifest.toml --model ollama:qwen2.5:7b --out out/
+  python -m subtitle_agent.run ep05/manifest.toml --model ollama:qwen2.5:7b --mode multi --out out/
 
 --dry-run needs no LLM and no LangGraph: it aligns sources, auto-accepts agreed
 lines, and writes the partial master plus a report of what the agent would get.
@@ -24,6 +24,7 @@ def main(argv=None):
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--model", default="ollama:qwen2.5:7b",
                     help="any init_chat_model id, e.g. ollama:qwen2.5:7b, openai:gpt-4o-mini")
+    ap.add_argument("--mode", choices=["single", "multi"], default="single")
     ap.add_argument("--show-pending", type=int, default=3, help="print N pending windows in dry run")
     args = ap.parse_args(argv)
 
@@ -40,12 +41,14 @@ def main(argv=None):
 
     from langchain.chat_models import init_chat_model
     from .graph import build_graph
+    from .usage import UsageCounter
 
     llm = init_chat_model(args.model, temperature=0)
-    app = build_graph(ep, llm, out)
-    final = app.invoke({}, config={"run_name": f"subtitle-agent:{ep.manifest.episode}",
-                                   "recursion_limit": 25})
-    print(json.dumps(final["report"], ensure_ascii=False, indent=1))
+    app = build_graph(ep, llm, out, mode=args.mode)
+    counter = UsageCounter()
+    final = app.invoke({}, config={"run_name": f"subtitle-agent:{ep.manifest.episode}:{args.mode}",
+                                   "recursion_limit": 50, "callbacks": [counter], "tags": [args.mode]})
+    print(json.dumps({**final["report"], **counter.summary()}, ensure_ascii=False, indent=1))
     print("wrote:", *final["written"], sep="\n  ")
 
 
