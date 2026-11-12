@@ -1,0 +1,6 @@
+- Keep spoken sponsor lines and real on-screen overlays, including Latin names and text.
+- Drop only constant sponsor scrolls that add nothing.
+- Lines that only one ASR model produced, with no subtitle and nothing in the other ASR, are often hallucinations (e.g. "subtitles by…" credits): drop them unless the context clearly supports them.
+- Too-fast cues: lengthen them where there is room without colliding with other cues.
+- Captions may share a moment (overlapping top captions are fine).
+- Translate on-screen graphics only when confident; otherwise leave a note.

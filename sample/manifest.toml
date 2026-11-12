@@ -1,0 +1,34 @@
+# One manifest per episode. Paths are relative to this file.
+episode = "demo"
+
+# Most trusted first. Agreed windows take this source's text and timing.
+priority = ["cropped_ocr", "funasr", "whisper"]
+# Sources accepted even when no other source has a line there.
+trusted_alone = ["cropped_ocr"]
+agree_threshold = 0.8
+
+glossary = "glossary.json"
+rules = "../rules.md"
+
+[[sources]]
+name = "cropped_ocr"
+kind = "subtitle"
+path = "cropped_ocr.srt"
+
+[[sources]]
+name = "funasr"
+kind = "speech"
+path = "funasr.srt"
+
+[[sources]]
+name = "whisper"
+kind = "speech"
+path = "whisper.srt"
+
+[[sources]]
+name = "paddle_fullframe"
+kind = "overlay"
+path = "fullframe_ocr.json"
+format = "json"
+list_key = "frames"
+fields = { start = "t0", end = "t1", text = "rec_text", conf = "rec_score" }
