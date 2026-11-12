@@ -1,81 +1,93 @@
-# Subtitle Agent
+# zh-en-subtitle-agent
 
-An agent that turns several noisy machine transcripts of a Chinese show (subtitle OCR, full-frame OCR, two ASR models) into a clean Chinese master and English subtitles with translator's notes.
+A LangGraph agent that turns several noisy machine transcripts of a Chinese TV show into a clean Chinese transcript and English subtitles with translator's notes.
 
-## Key design decision: the agent doesn't run the models
+**Who it's for:** fans and translators subtitling shows that have no official English subs. I built it to replace my own manual workflow: running several OCR and speech-recognition models over each episode, then hand-merging their disagreements.
 
-OCR and ASR run beforehand, in Colab or wherever is cheapest. Their outputs are listed in a `manifest.toml`. The agent only works on the cases where the sources disagree.
+## The problem
 
-- **Why:** the models are slow, need a GPU, and give the same output every time. Re-running them inside an agent loop costs time and money for nothing. The judgment calls are the hard part: which source to trust, whether a line is a hallucination, how to keep names consistent.
-- **Tradeoff:** the agent can't ask for a fresh model pass (for example, "re-OCR this 3 s at higher resolution"). It can only look at what was precomputed. A future `request_rerun` tool could queue that work instead of running it inline.
-- **Measured effect:** most windows are auto-accepted with no LLM call at all. `report.json` gives the split for each episode.
+No single model gets a variety show right:
 
-## Two architectures (for comparison)
-
-| | `--mode single` (baseline) | `--mode multi` |
+| Source | Good at | Fails at |
 |---|---|---|
-| Reconcile | one agent, windows one at a time | one **reconciler agent per window, in parallel** (LangGraph `Send`) |
-| Translate | translator, one pass | **translator ↔ reviewer**: reviewer flags problems, translator revises (1 round) |
-| QA | deterministic timing repair | same |
+| Subtitle OCR (cropped) | Exact wording of burned-in subs | Look-alike characters (备 → 各) |
+| Full-frame OCR | Signs, captions, graphics | Re-reads the subtitles; sponsor scrolls |
+| ASR (FunASR, Whisper) | Lines with no subtitle | Names; hallucinated "字幕由…提供" credits over silence |
 
-Both share tools, prompts, schemas and QA, so the comparison isolates the architecture:
-
-```bash
-python -m subtitle_agent.compare sample/manifest.toml --model ollama:qwen2.5:7b \
-    --ref-zh sample/reference_zh.srt --ref-en sample/reference_en.srt
-```
-→ a table of Chinese CER, English chrF, LLM calls, tokens and time per mode (`out/compare/compare.md`).
-
-## Lessons from evals
-
-- **Run 1 (qwen2.5:7b, single):** CER 0.025. The agent dropped the Whisper hallucination, but its free-text JSON for the OCR-typo window was unparseable, so it fell back to the OCR text and kept the typo. **Fix:** schema-constrained structured output (Pydantic + `with_structured_output`), with a text-parse fallback and the raw error logged in the notes.
+The agent's job is to make the judgment calls I used to make by hand.
 
 ## How it works
 
 ```
-precomputed files ─► loaders ─► align into time windows ─► agree? ──yes──► auto-accept
-  (manifest.toml)    (SRT/JSON)  (no LLM)                    │
+precomputed OCR/ASR files ─► align into time windows ─► sources agree? ─yes─► auto-accept
+       (manifest.toml)          (plain code, no LLM)          │
                                                              no
-                                                             ▼
-                          LangGraph:  reconcile agent (tools) ─► translate ─► QA ─► write
-                                                                    ▲           │
-                                                                    └─ shorten ─┘ (1 retry)
+                                                              ▼
+              reconciler agent (tools) ─► translator ─► [reviewer] ─► timing QA ─► .srt + notes
 ```
 
-| Piece | File | LLM? |
+- **Alignment (deterministic):** groups cues from every source by time and scores agreement. It sends a window to the agent only when sources disagree, and also when one OCR reading is outvoted by two ASR models that agree with each other.
+- **Reconciler (the agentic step):** a tool-using LLM decides what was really said. It can look at neighbouring time (`get_window`), compare sources (`compare_sources`), look up names (`lookup_glossary`), and check the rules (`get_rules`). It answers in a fixed schema (`Decision`), so even small models can't break the format.
+- **Translator → reviewer:** batches lines with glossary hits and prior context. In multi-agent mode, a reviewer flags problems and the translator revises them once.
+- **Timing QA (deterministic):** lengthens cues that are too fast to read, where there's room.
+
+Built with LangGraph, LangChain, and LangSmith (tracing). It runs on any chat model; I use **Qwen 2.5 7B via Ollama** on a Colab GPU.
+
+### Key design decision: the agent doesn't run the models
+
+OCR and ASR run beforehand, and the agent reads their saved outputs.
+- **Why:** the models are slow, need a GPU, and give the same output every time. Running them inside an agent loop would cost time and money for nothing. The hard part is judgment, not extraction.
+- **Tradeoff:** the agent can't ask for a fresh pass (for example, "re-OCR these 3 seconds at higher resolution"). It can only use what was precomputed.
+- **Benefit:** most windows are auto-accepted with **no LLM call at all**. The LLM only sees real disputes.
+
+Honest framing: this is mostly a **workflow with one agentic step**. LLM autonomy is used only where judgment is needed, and the rest is plain, testable code.
+
+## Single vs multi-agent
+
+| | `--mode single` | `--mode multi` |
 |---|---|---|
-| Load any SRT/JSON into one `Cue` format | `sources.py` | no |
-| Group cues into windows, score agreement, find OCR typos outvoted by ASR, drop duplicate or recurring overlays | `timeline.py` | no |
-| Glossary retrieval (names, show terms) | `glossary.py` | no |
-| Agent tools: `get_window`, `compare_sources`, `lookup_glossary`, `get_rules` | `tools.py` | — |
-| Graph (single + multi modes), structured-output schemas | `graph.py` | yes |
-| Run both modes and score them | `compare.py` | yes |
-| chrF translation score | `eval_mt.py` | no |
-| Reading-speed QA: lengthen cues where there's room | `output.py` | no |
-| CER evaluation + per-source ablation | `eval_cer.py` | no |
+| Reconcile | one agent, one window at a time | one reconciler per window, **in parallel** (LangGraph `Send`) |
+| Translate | one pass | translator ↔ **reviewer** loop |
+
+Both modes share tools, prompts, and QA, so a comparison isolates the architecture.
+
+## Evaluation
+
+- **Chinese:** character error rate (CER) against a hand-corrected transcript, plus each raw source scored alone as a baseline.
+- **English:** chrF (character n-gram F-score) against a reference translation.
+- **Cost:** LLM calls, tokens, and time, per mode.
+
+### Results so far (sample clip, qwen2.5:7b)
+
+| Run | What happened | Change |
+|---|---|---|
+| 1 | CER 0.025 (best single source: 0.175). Dropped the Whisper hallucination, but the model's free-text JSON for the OCR-typo window was unparseable, so the typo survived. | Switched to schema-constrained structured output |
+| 2 | 0 parse failures; typo fixed. CER 0.05. The only difference from the reference was a filler sound (嗯嗯) the agent kept. | Decided that confident filler sounds belong in the subtitles: updated rules + reference |
+
+Single vs multi on the sample: identical quality, with multi using 1 extra LLM call. The reviewer found nothing to fix. The 5-line sample is too easy to separate the architectures; full-episode comparisons are next.
 
 ## Run it
 
 ```bash
 pip install -r requirements.txt
+python -m unittest discover -s tests
 
-# 1. No LLM needed: see what the agent would receive
+# no LLM needed: see what the agent would receive
 python -m subtitle_agent.run sample/manifest.toml --dry-run
 
-# 2. Full agent with a free local model (install Ollama, then: ollama pull qwen2.5:7b)
-python -m subtitle_agent.run sample/manifest.toml --model ollama:qwen2.5:7b --out out/
+# full run (Ollama: `ollama pull qwen2.5:7b`)
+python -m subtitle_agent.run sample/manifest.toml --model ollama:qwen2.5:7b --mode multi
 
-# 3. Score against a hand-finished reference, and score each raw source alone
-python -m subtitle_agent.eval_cer --ref sample/reference_zh.srt --hyp out/demo_zh.srt --manifest sample/manifest.toml
-
-python -m unittest discover -s tests
+# compare architectures
+python -m subtitle_agent.compare sample/manifest.toml --model ollama:qwen2.5:7b \
+    --ref-zh sample/reference_zh.srt --ref-en sample/reference_en.srt
 ```
 
-Tracing: set `LANGSMITH_TRACING=true` and `LANGSMITH_API_KEY=...` before a full run, and every tool call and decision appears in LangSmith.
+On a GPU: open `notebooks/colab_run.ipynb` in Colab. Tracing: set `LANGSMITH_TRACING=true` and `LANGSMITH_API_KEY`.
 
-## Using a real episode
+### Using your own episode
 
-Copy `sample/manifest.toml` next to your episode's files and edit the `[[sources]]` blocks. SRT works as-is. For JSON, map the field names:
+Point a `manifest.toml` at your files. SRT works as-is; for JSON, map the field names:
 
 ```toml
 [[sources]]
@@ -83,19 +95,22 @@ name = "paddle_fullframe"
 kind = "overlay"            # subtitle | speech | overlay
 path = "ocr_raw.json"
 format = "json"
-list_key = "frames"         # where the list of items lives
+list_key = "frames"
 fields = { start = "t0", end = "t1", text = "rec_text", conf = "rec_score" }
-# time_scale = 0.001        # if times are in ms
 ```
 
-## Roadmap
+## Code map
 
-- [ ] Eval set from finished episodes (ep4 Chinese master as reference); track CER per source vs. agent
-- [ ] Translation eval: LLM-judge rubric + human spot checks against the finished English SRTs
-- [ ] Prompt-injection test: on-screen text containing instructions, check the agent transcribes rather than obeys
-- [ ] Dockerfile + cloud deploy of a demo running on cached outputs from a short clip
-- [x] Multi-agent mode: parallel reconcilers (`Send`) + translator/reviewer loop
-- [ ] Supervisor that routes each conflict to a specialist (OCR-vs-ASR, hallucination check, overlay)
-- [ ] Test on a video with official zh + en subtitles (held-out test set; don't tune on it)
+| File | What | LLM? |
+|---|---|---|
+| `sources.py` | Load SRT/JSON into one cue format; manifest | no |
+| `timeline.py` | Alignment, agreement scoring, overlay de-dup | no |
+| `glossary.py` | Name/term retrieval | no |
+| `tools.py` | The reconciler's tools | — |
+| `graph.py` | LangGraph graph (both modes), output schemas | yes |
+| `output.py` | Timing QA, SRT + notes writers | no |
+| `eval_cer.py`, `eval_mt.py`, `compare.py` | Evaluation | — |
 
-*No show footage or full transcripts are included in this repo. Sample data is invented.*
+Roadmap: see [Issues](../../issues).
+
+*No show footage or full transcripts are included. The sample data is invented.*

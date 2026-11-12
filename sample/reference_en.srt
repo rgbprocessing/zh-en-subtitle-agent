@@ -15,9 +15,13 @@ This kimchi is way too spicy.
 Myeongdong, Seoul
 
 5
+00:00:08,000 --> 00:00:09,000
+Mm-hmm.
+
+6
 00:00:10,000 --> 00:00:12,000
 Captain Kim, are you ready?
 
-6
+7
 00:00:13,000 --> 00:00:15,000
 The next day
