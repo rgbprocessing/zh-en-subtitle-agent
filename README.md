@@ -33,7 +33,7 @@ precomputed OCR/ASR files ─► align into time windows ─► sources agree? �
 
 Built with LangGraph, LangChain, and LangSmith (tracing). It runs on any chat model; I use **Qwen 2.5 7B via Ollama** on a Colab GPU.
 
-### Key design decision: the agent doesn't run the models
+### Key design decisions:
 
 OCR and ASR run beforehand, and the agent reads their saved outputs.
 - **Why:** the models are slow, need a GPU, and give the same output every time. Running them inside an agent loop would cost time and money for nothing. The hard part is judgment, not extraction.
